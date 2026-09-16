@@ -25,8 +25,11 @@ plus DMG packaging is too slow to sit in the normal push path.
 ### Portal URL
 
 `CAELON_PORTAL_URL` is a **compile-time** constant, defaulting to
-`https://portal.caelonhq.com`. To build a binary pointing elsewhere (staging,
-a preview deploy), run the workflow manually and set the `portal_url` input.
+`https://portal.caelonhq.com/auth/sign-in?error=account_not_linked`. This is the
+same sign-in workaround as `DEFAULT_PORTAL_URL` in `src-tauri/src/lib.rs`: a bare
+sign-in route immediately redirects to OIDC before Portal can render its own
+sign-in UI. To build a binary pointing elsewhere (staging, a preview deploy), run
+the workflow manually and set the `portal_url` input; that explicit input wins.
 
 Because it is compile-time, `src-tauri/build.rs` declares
 `cargo:rerun-if-env-changed=CAELON_PORTAL_URL` so a changed value correctly
@@ -44,3 +47,20 @@ import and fail, instead of cleanly skipping signing.
 
 Unsigned bundles trip Gatekeeper on any machine that downloads them. The
 workflow's final step prints the `xattr -dr com.apple.quarantine` workaround.
+
+The architecture check reads `CFBundleExecutable` from each generated app's
+`Contents/Info.plist` instead of assuming the `.app` directory name matches the
+Cargo binary name.
+
+## `test.yml` â€” cross-platform checks
+
+Runs on Ubuntu, Windows, and `macos-14` for pushes, pull requests, and manual
+dispatches. It installs Node 20 and runs `node --test tests/*.test.mjs` directly;
+the test suite uses Node built-ins and needs neither `pnpm install` nor a frontend
+build. It then runs `cargo test --locked --verbose` from `src-tauri` with the
+platform webview dependencies installed on Ubuntu.
+
+The macOS bundle workflow also runs JavaScript and locked ARM64 Rust tests before
+building. Remote workflows test the pushed ref. To repeat the checks locally on
+Apple Silicon, run `bash scripts/test-macos.sh` and record runtime results in
+`docs/desktop-validation.md`.

@@ -1,11 +1,13 @@
 # Caelon Portal — Desktop Shell (POC)
 
 A minimal [Tauri v2](https://tauri.app) desktop shell that loads the hosted Portal
-app at **https://portal.caelonhq.com**.
+at **https://portal.caelonhq.com/auth/sign-in?error=account_not_linked**. The query
+string deliberately keeps Portal's sign-in UI from immediately starting the OIDC
+redirect; see "How the Portal URL is configured".
 
-This is intentionally a *shell*, not a port. It has no custom commands, no local
-backend, and no native features. Its entire job is: open one window, point it at
-Portal, and keep everything else out.
+This is intentionally a *shell*, not a port. It has no custom commands or local
+backend. It provides native lifecycle and notification integrations while loading
+Portal's hosted interface.
 
 ---
 
@@ -79,10 +81,14 @@ src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Caelon Portal_0.1.0_aar
 
 ### Building macOS from CI
 
-`.github/workflows/build.yml` builds the Apple Silicon bundle on a `macos-14`
-runner (arm64, so it is a native build rather than a cross-compile) and uploads
-the `.app` and `.dmg` as artifacts. It can be triggered manually via
-**workflow_dispatch**. A cross-platform `cargo test` job gates it.
+`.github/workflows/desktop-macos.yml` builds the Apple Silicon bundle on a
+`macos-14` runner (arm64, so it is a native build rather than a cross-compile)
+and uploads the `.app` archive and `.dmg` as artifacts. It can be triggered
+manually via **workflow_dispatch** or by a `desktop-v*` tag. Its bundle check reads
+`CFBundleExecutable` from the generated `Info.plist`, then verifies that exact
+binary is arm64. `.github/workflows/test.yml` is the normal cross-platform gate:
+it runs Node's built-in notification-filter suite and the locked Rust suite on
+Ubuntu, Windows, and macOS.
 
 You **cannot** produce a macOS bundle from Windows or Linux — Apple's toolchain
 and code-signing tools are macOS-only. Use CI or a Mac.
@@ -106,12 +112,33 @@ Gatekeeper will quarantine downloaded copies. For distribution:
 
 ---
 
+### Testing Phase 1 on a Mac
+
+GitHub Actions builds the pushed Phase 1 source and runs both test suites before
+packaging. Download its artifacts for manual testing, or clone the repository
+on an Apple Silicon Mac and run:
+
+```sh
+cd caelon-desktop
+bash scripts/test-macos.sh
+```
+
+The script checks prerequisites, runs JavaScript and locked ARM64 Rust
+tests, builds the `.app` and `.dmg`, and verifies the executable named by
+`CFBundleExecutable`. It then prints the `.app` path for the manual lifecycle,
+menu-bar, icon, login, permission, and notification checks in
+[`docs/desktop-validation.md`](docs/desktop-validation.md). Those runtime checks
+remain separate evidence from successful compilation.
+
+---
+
 ## How the Portal URL is configured
 
 One place, one source of truth: `src-tauri/src/lib.rs`.
 
 ```rust
-const DEFAULT_PORTAL_URL: &str = "https://portal.caelonhq.com";
+const DEFAULT_PORTAL_URL: &str =
+    "https://portal.caelonhq.com/auth/sign-in?error=account_not_linked";
 
 const PORTAL_URL: &str = match option_env!("CAELON_PORTAL_URL") {
     Some(url) => url,
@@ -420,8 +447,10 @@ is how you get it back.
 | Gesture | Result |
 | --- | --- |
 | Close (X) | Window hides; the process keeps running |
-| Left-click the tray icon | Toggle: hide the window, or show + unminimize + focus it |
-| Right-click the tray icon | Menu: **Show Caelon Portal**, **Quit** |
+| Windows left-click the tray icon | Toggle: hide the window, or show + unminimize + focus it |
+| Windows right-click the tray icon | Menu: **Show Caelon Portal**, **Quit** |
+| macOS menu-bar icon click | Menu: **Show Caelon Portal**, **Quit**; it does not also toggle the window |
+| macOS dock icon after hiding | Reuses the existing window and shows + unminimizes + focuses it |
 | Quit | The only thing that ends the process |
 
 Hiding rather than closing is the point of the feature, not a side effect of it.
@@ -472,26 +501,19 @@ the icon is really there and `None` means it is not. Whether it sits in the
 visible tray or is tucked into the overflow chevron is a per-user Windows
 setting that neither the app nor the rect can tell you.
 
-### macOS will differ, in four ways
+### macOS lifecycle and menu bar
 
-Nothing here has run on macOS. Expect to do work:
+On macOS, `RunEvent::Reopen` finds the existing `main` window and calls the same
+`tray::reveal` helper used by Show. It never constructs a second webview, so the
+Portal session remains in the original window. The menu bar uses the transparent,
+monochrome `src-tauri/icons/tray-template.png` asset with
+`icon_as_template(true)`, and clicking it opens the Show/Quit menu without a
+second toggle event. PNG decoding is explicitly enabled through Tauri's
+`image-png` Cargo feature.
 
-1. **The icon will look wrong.** macOS menu bar icons are template images --
-   monochrome silhouettes that invert with the menu bar. This reuses the
-   bundled colour app icon, which macOS will render as-is. A proper fix is a
-   dedicated monochrome asset plus `icon_as_template(true)`; turning that flag
-   on against the current artwork would just produce a blob.
-2. **Left-click is not the macOS convention.** `show_menu_on_left_click(false)`
-   makes left-click a toggle, which is what was asked for, but menu bar items
-   conventionally open their menu on either button.
-3. **The dock icon is a dead end.** After hiding, clicking the dock icon does
-   nothing: reviving the window needs a `RunEvent::Reopen` handler, which is not
-   written. On macOS that matters more than on Windows, because the dock icon is
-   the obvious thing to click.
-4. **Closing the last window already behaves differently.** macOS apps
-   conventionally stay alive with no windows, so hide-on-close is closer to
-   native there than on Windows -- but it also means the app can end up with no
-   window, no dock response, and only the menu bar left.
+This implementation has not yet been exercised on macOS. Use the manual checklist
+in `docs/desktop-validation.md` to record dock reopen, menu, icon appearance,
+close-to-hide, and notification observations on an Apple Silicon Mac.
 
 ---
 

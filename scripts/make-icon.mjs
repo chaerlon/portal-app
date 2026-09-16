@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /**
- * Generates scripts/icon-source.png -- a 1024x1024 PLACEHOLDER app icon.
+ * Generates scripts/icon-source.png -- a 1024x1024 PLACEHOLDER app icon --
+ * and src-tauri/icons/tray-template.png, a transparent monochrome macOS menu
+ * bar template icon.
  *
  * !! PLACEHOLDER !!  There is no Caelon brand asset in this repo. Replace
  * scripts/icon-source.png with the real 1024x1024 artwork and re-run
@@ -166,6 +168,59 @@ function render() {
   return encodePng(SIZE, SIZE, rgba);
 }
 
+function trayLetterCCoverage(x, y, size) {
+  const cx = size / 2;
+  const cy = size / 2;
+  const rOuter = size * 0.39;
+  const rInner = size * 0.235;
+  const mid = (rOuter + rInner) / 2;
+  const capR = (rOuter - rInner) / 2;
+  const openingDeg = 38;
+  const dx = x - cx;
+  const dy = y - cy;
+  const dist = Math.hypot(dx, dy);
+  let ring = Math.min(cover(dist - rOuter), cover(rInner - dist));
+  const angle = Math.abs((Math.atan2(dy, dx) * 180) / Math.PI);
+
+  if (angle < openingDeg) ring = 0;
+
+  const theta = (openingDeg * Math.PI) / 180;
+  const caps = Math.max(
+    discCoverage(x, y, cx + mid * Math.cos(theta), cy + mid * Math.sin(theta), capR),
+    discCoverage(x, y, cx + mid * Math.cos(-theta), cy + mid * Math.sin(-theta), capR)
+  );
+  return Math.max(ring, caps);
+}
+
+function renderTrayTemplate() {
+  const size = 44;
+  const rgba = Buffer.alloc(size * size * 4);
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const coverage = trayLetterCCoverage(x + 0.5, y + 0.5, size);
+      const i = (y * size + x) * 4;
+      // macOS uses the alpha silhouette when `icon_as_template(true)` is set.
+      // RGB stays black and every background pixel is fully transparent.
+      rgba[i] = 0;
+      rgba[i + 1] = 0;
+      rgba[i + 2] = 0;
+      rgba[i + 3] = Math.round(coverage * 255);
+    }
+  }
+
+  return encodePng(size, size, rgba);
+}
+
 const outPath = join(dirname(fileURLToPath(import.meta.url)), "icon-source.png");
+const trayTemplatePath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "src-tauri",
+  "icons",
+  "tray-template.png"
+);
 writeFileSync(outPath, render());
+writeFileSync(trayTemplatePath, renderTrayTemplate());
 console.log(`wrote placeholder icon: ${outPath} (${SIZE}x${SIZE})`);
+console.log(`wrote macOS tray template icon: ${trayTemplatePath} (44x44)`);

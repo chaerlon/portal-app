@@ -30,6 +30,26 @@ pub enum TrayAction {
     Hide,
 }
 
+/// How the menu-bar/tray icon should react to a primary click.
+///
+/// macOS convention is for the menu-bar item to open its menu. Windows keeps
+/// the existing show/hide toggle so its notification-area behaviour is
+/// unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayIconClickBehavior {
+    OpenMenu,
+    ToggleWindow,
+}
+
+/// Select the primary-click behaviour for a platform.
+pub fn tray_icon_click_behavior(is_macos: bool) -> TrayIconClickBehavior {
+    if is_macos {
+        TrayIconClickBehavior::OpenMenu
+    } else {
+        TrayIconClickBehavior::ToggleWindow
+    }
+}
+
 /// Decide what a left-click means for a window in the given state.
 ///
 /// A minimized window counts as *not* shown, even though the platform still
@@ -112,13 +132,13 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &quit])?;
 
+    let click_behavior = tray_icon_click_behavior(cfg!(target_os = "macos"));
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip(WINDOW_TITLE)
         .menu(&menu)
-        // Left-click has to arrive as a click event rather than popping the
-        // menu, which is what makes it a show/hide toggle. Right-click still
-        // opens the menu.
-        .show_menu_on_left_click(false)
+        // macOS convention is for the menu-bar icon to open its menu. Windows
+        // preserves the existing left-click show/hide toggle.
+        .show_menu_on_left_click(matches!(click_behavior, TrayIconClickBehavior::OpenMenu))
         .on_menu_event(|app, event| match event.id.as_ref() {
             MENU_SHOW => {
                 if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
@@ -132,27 +152,45 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             }
             _ => {}
         })
-        .on_tray_icon_event(|tray, event| {
-            // A click reports both press and release; reacting to one of them
-            // keeps a single click from toggling twice.
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                if let Some(window) = tray.app_handle().get_webview_window(WINDOW_LABEL) {
-                    toggle(&window);
+        .on_tray_icon_event(move |tray, event| {
+            if matches!(click_behavior, TrayIconClickBehavior::ToggleWindow) {
+                // A click reports both press and release; reacting to one of
+                // them keeps a single Windows click from toggling twice.
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    if let Some(window) = tray.app_handle().get_webview_window(WINDOW_LABEL) {
+                        toggle(&window);
+                    }
                 }
             }
         });
 
-    // The tray reuses the bundled app icon. If the context somehow carries
-    // none, the tray still builds -- it would just be an invisible entry, which
-    // is worth saying out loud rather than failing the whole launch over.
-    match app.default_window_icon() {
-        Some(icon) => builder = builder.icon(icon.clone()),
-        None => eprintln!("[tray] no default window icon; the tray entry will be blank"),
+    #[cfg(target_os = "macos")]
+    {
+        // `Image::from_bytes` requires Tauri's `image-png` feature, which is
+        // explicitly enabled in Cargo.toml. Keeping the artwork in the binary
+        // makes a missing file a build failure and a malformed image a visible
+        // startup failure instead of silently falling back to the colour app
+        // icon, which is unreadable as a menu-bar template.
+        let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))
+            .map_err(|e| {
+                eprintln!("[tray] failed to load macOS template icon: {e}");
+                e
+            })?;
+        builder = builder.icon(icon).icon_as_template(true);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Other platforms continue to use the bundled application icon.
+        match app.default_window_icon() {
+            Some(icon) => builder = builder.icon(icon.clone()),
+            None => eprintln!("[tray] no default window icon; the tray entry will be blank"),
+        }
     }
 
     let tray = builder.build(app)?;
@@ -227,6 +265,22 @@ pub fn spawn_selftest<R: Runtime>(window: &WebviewWindow<R>, and_quit: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_macos_menu_bar_click_opens_the_menu_without_toggling_the_window() {
+        assert_eq!(
+            tray_icon_click_behavior(true),
+            TrayIconClickBehavior::OpenMenu
+        );
+    }
+
+    #[test]
+    fn a_windows_notification_area_click_keeps_the_window_toggle() {
+        assert_eq!(
+            tray_icon_click_behavior(false),
+            TrayIconClickBehavior::ToggleWindow
+        );
+    }
 
     #[test]
     fn a_shown_window_is_hidden() {

@@ -42,6 +42,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The injected notification-filter tests use only Node built-ins. They
+      # exercise the shipped browser script directly and do not need pnpm or a
+      # frontend build because this shell loads Portal remotely.
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run JavaScript tests
+        shell: bash
+        run: node --test tests/*.test.mjs
+
       # Tauri's Linux backend links against WebKitGTK. These are needed even for
       # `cargo test`, because the `tauri` crate itself is a dependency of the
       # crate under test and must compile.
@@ -63,6 +75,6 @@ jobs:
         with:
           workspaces: src-tauri -> target
 
-      - name: Run tests
+      - name: Run Rust tests
         working-directory: src-tauri
-        run: cargo test --verbose
+        run: cargo test --locked --verbose

@@ -8,6 +8,8 @@ mod navigation;
 mod tray;
 
 use navigation::{Decision, Policy};
+#[cfg(target_os = "macos")]
+use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 /// The start URL for the main window.
@@ -101,7 +103,7 @@ pub fn run() {
         println!("[notify] self-test probe enabled");
     }
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
@@ -112,29 +114,29 @@ pub fn run() {
                 WINDOW_LABEL,
                 WebviewUrl::External(portal_url.clone()),
             )
-                .title(WINDOW_TITLE)
-                .inner_size(1280.0, 832.0)
-                .min_inner_size(900.0, 600.0)
-                .resizable(true)
-                .initialization_script(&bridge)
-                .on_navigation(move |url| match policy.decide(url) {
-                    Decision::Allow => {
-                        println!("[nav] allow {url}");
-                        true
+            .title(WINDOW_TITLE)
+            .inner_size(1280.0, 832.0)
+            .min_inner_size(900.0, 600.0)
+            .resizable(true)
+            .initialization_script(&bridge)
+            .on_navigation(move |url| match policy.decide(url) {
+                Decision::Allow => {
+                    println!("[nav] allow {url}");
+                    true
+                }
+                Decision::OpenExternally => {
+                    println!("[nav] external {url}");
+                    if let Err(e) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
+                        eprintln!("[nav] failed to open {url} in system browser: {e}");
                     }
-                    Decision::OpenExternally => {
-                        println!("[nav] external {url}");
-                        if let Err(e) = tauri_plugin_opener::open_url(url.as_str(), None::<&str>) {
-                            eprintln!("[nav] failed to open {url} in system browser: {e}");
-                        }
-                        false
-                    }
-                    Decision::Block => {
-                        println!("[nav] block {url}");
-                        false
-                    }
-                })
-                .build()?;
+                    false
+                }
+                Decision::Block => {
+                    println!("[nav] block {url}");
+                    false
+                }
+            })
+            .build()?;
 
             // Close hides rather than quits, so the page keeps running and
             // notifications keep arriving; the tray is then the only way back
@@ -150,6 +152,32 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Caelon Portal");
+        .build(tauri::generate_context!())
+        .expect("error while building Caelon Portal");
+
+    app.run(|app, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } = event
+        {
+            match app.get_webview_window(WINDOW_LABEL) {
+                Some(window) => {
+                    println!(
+                        "[lifecycle] macOS reopen -> reveal (has_visible_windows={has_visible_windows})"
+                    );
+                    // Reusing the existing window preserves the Portal session
+                    // and avoids creating a second webview or login flow.
+                    tray::reveal(&window);
+                }
+                None => eprintln!(
+                    "[lifecycle] macOS reopen ignored: existing {WINDOW_LABEL:?} window was not found"
+                ),
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, event);
+    });
 }
