@@ -1,0 +1,193 @@
+# Builds the Caelon Portal Tauri desktop client for Apple Silicon macOS.
+#
+# The POC is developed and smoke-tested on Windows (WebView2); this workflow is
+# how the actual macOS target gets produced, since a macOS bundle cannot be
+# created from a Windows or Linux host.
+#
+# Runner choice: `macos-14` is GitHub's Apple Silicon (M1, arm64) image. We build
+# aarch64 *natively* there rather than cross-compiling from the x86_64 image
+# (`macos-13`). Native is strongly preferred because the Tauri/wry stack links
+# against system WebKit and other macOS frameworks; cross-linking those from an
+# x86_64 host requires a matching arm64 SDK sysroot and reliably causes
+# link-time and codesign arch-mismatch failures. `macos-latest` also points at
+# arm64 now, but we pin explicitly so a future alias change cannot silently
+# flip the output architecture.
+
+name: Desktop — macOS (Apple Silicon)
+
+on:
+  # Manual runs, with an optional override of the URL compiled into the binary.
+  workflow_dispatch:
+    inputs:
+      portal_url:
+        description: "Portal URL compiled into the app (CAELON_PORTAL_URL)"
+        required: false
+        type: string
+        default: "https://portal.caelonhq.com"
+  # Release builds are tag-driven. Deliberately NOT on every push to main —
+  # a full Rust release build plus DMG packaging is far too slow for that.
+  push:
+    tags:
+      - "desktop-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build .app + .dmg (aarch64-apple-darwin)
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pnpm must be installed BEFORE setup-node, because setup-node's
+      # `cache: pnpm` needs the pnpm binary on PATH to resolve the store path.
+      #
+      # No `version` input on purpose: pnpm/action-setup@v4 reads the version from
+      # the `packageManager` field in package.json. That keeps CI and
+      # local development pinned to one source of truth. Passing `version` here as
+      # well makes the action error out when the two disagree.
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Rust (stable, aarch64-apple-darwin)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      # Caches the Cargo registry and the src-tauri target dir. The
+      # `workspaces` syntax is "<manifest dir> -> <target dir>".
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # Requires a committed pnpm-lock.yaml. If this step fails
+      # with ERR_PNPM_NO_LOCKFILE, commit the lockfile (do not silently drop
+      # --frozen-lockfile — that would let CI resolve different dependency
+      # versions than local development).
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build macOS bundle
+        env:
+          # Compile-time constant baked into the Rust binary. The `||` fallback
+          # covers the tag-push path, where `inputs` is empty.
+          # src-tauri/build.rs declares `cargo:rerun-if-env-changed=CAELON_PORTAL_URL`,
+          # so changing this correctly invalidates the cached build.
+          CAELON_PORTAL_URL: ${{ inputs.portal_url || 'https://portal.caelonhq.com' }}
+
+          # ---------------------------------------------------------------
+          # CODE SIGNING / NOTARIZATION — intentionally disabled for the POC.
+          #
+          # To enable later, add these repository secrets and uncomment. No
+          # other part of this workflow needs to change; the Tauri CLI picks
+          # these up automatically during the bundle step.
+          #
+          #   APPLE_CERTIFICATE           base64 of the .p12 Developer ID cert
+          #   APPLE_CERTIFICATE_PASSWORD  password for that .p12
+          #   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Caelon (TEAMID)"
+          #   APPLE_ID                    Apple ID used for notarization
+          #   APPLE_PASSWORD              app-specific password for that Apple ID
+          #   APPLE_TEAM_ID               10-character Apple Developer team ID
+          #
+          # They are commented rather than passed-through-empty on purpose:
+          # an empty-but-present APPLE_CERTIFICATE makes the CLI attempt a
+          # keychain import and fail, rather than cleanly skipping signing.
+          #
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # ---------------------------------------------------------------
+        run: pnpm tauri build --target aarch64-apple-darwin
+
+      # Fails loudly if the bundle is missing or was built for the wrong arch,
+      # instead of silently uploading a broken artifact.
+      - name: Verify bundle architecture
+        run: |
+          set -euo pipefail
+          BUNDLE_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          APP_PATH="$(find "$BUNDLE_DIR/macos" -maxdepth 1 -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::No .app bundle found under $BUNDLE_DIR/macos"
+            exit 1
+          fi
+          APP_NAME="$(basename "$APP_PATH" .app)"
+          BIN="$APP_PATH/Contents/MacOS/$APP_NAME"
+          echo "Bundle:     $APP_PATH"
+          echo "Executable: $BIN"
+          lipo -archs "$BIN"
+          lipo -archs "$BIN" | grep -q 'arm64' || {
+            echo "::error::Executable is not arm64"
+            exit 1
+          }
+          codesign -dv "$APP_PATH" 2>&1 | head -5 || echo "(unsigned — expected for the POC)"
+
+      # A .app is a directory. upload-artifact zips it, and that round-trip does
+      # not reliably preserve the executable bit or internal symlinks, which
+      # yields a downloaded bundle macOS refuses to launch. Tarring first keeps
+      # POSIX permissions intact.
+      - name: Archive .app (preserving permissions)
+        run: |
+          set -euo pipefail
+          cd src-tauri/target/aarch64-apple-darwin/release/bundle/macos
+          tar -czf "Caelon-Portal-aarch64-apple-darwin.tar.gz" ./*.app
+          ls -la
+
+      - name: Upload .app
+        uses: actions/upload-artifact@v4
+        with:
+          name: caelon-portal-macos-aarch64-app
+          path: src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Caelon-Portal-aarch64-apple-darwin.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: caelon-portal-macos-aarch64-dmg
+          path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Installation notes
+        run: |
+          cat <<'NOTES'
+          ============================================================
+          This build is UNSIGNED and UNNOTARIZED.
+
+          macOS attaches a com.apple.quarantine attribute to anything
+          downloaded via a browser, and Gatekeeper refuses to open an
+          unsigned quarantined bundle with "app is damaged and can't be
+          opened" -- which is misleading; the bundle is fine, it is simply
+          not signed.
+
+          To run it on another Mac:
+
+            tar -xzf Caelon-Portal-aarch64-apple-darwin.tar.gz
+            xattr -dr com.apple.quarantine "Caelon Portal.app"
+            open "Caelon Portal.app"
+
+          Right-click -> Open also works for a single machine.
+
+          The real fix is a Developer ID certificate plus notarization --
+          see the commented signing block in this workflow.
+          ============================================================
+          NOTES

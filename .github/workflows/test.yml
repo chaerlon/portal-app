@@ -1,0 +1,68 @@
+# Cheap, fast correctness gate.
+#
+# The navigation policy in src-tauri/src/navigation.rs is deliberately pure Rust
+# with no Tauri or webview dependency, so it can be tested on every platform.
+# That is what keeps this shell honestly cross-platform: if a change makes the
+# host-allowlist logic behave differently on Linux/Windows/macOS, this catches it
+# without building a single webview.
+#
+# The actual macOS bundle is built by desktop-macos.yml, which is tag- and
+# dispatch-driven because a full Rust release build plus DMG packaging is far too
+# slow to run on every push.
+
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Tauri's Linux backend links against WebKitGTK. These are needed even for
+      # `cargo test`, because the `tauri` crate itself is a dependency of the
+      # crate under test and must compile.
+      - name: Install Linux webview dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Run tests
+        working-directory: src-tauri
+        run: cargo test --verbose

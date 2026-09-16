@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the generated Info.plist by Tauri at bundle time (macOS only).
+  No App Transport Security exception is declared: the shell talks to Portal
+  over HTTPS exclusively, and the navigation policy blocks plain HTTP to the
+  Portal host outright.
+-->
+<plist version="1.0">
+  <dict>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+  </dict>
+</plist>

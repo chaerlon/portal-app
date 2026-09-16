@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "portal-notifications",
+  "description": "Grants the hosted Portal origin exactly ONE capability: raising OS notifications. This is the only IPC the remote origin has, and it is deliberately isolated in its own file so the grant is obvious in review -- `default.json` remains remote-free. Consequence to understand before widening this: any script running on portal.caelonhq.com, including one injected via XSS or a compromised dependency, can raise notifications with arbitrary text. It cannot reach filesystem, shell, window, or process APIs. Do not add permissions here; add a separate capability with its own justification instead. NOTE: the URL below is static and must be updated by hand if CAELON_PORTAL_URL is repointed at another deployment.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["https://portal.caelonhq.com/*"]
+  },
+  "permissions": [
+    "notification:allow-notify",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission"
+  ]
+}

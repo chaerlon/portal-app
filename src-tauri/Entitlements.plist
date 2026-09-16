@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  NOT wired into tauri.conf.json on purpose.
+
+  Entitlements are only applied during codesigning. Referencing this file while
+  building unsigned (as this POC does) buys nothing and can fail the bundle
+  step. When you move to a signed + notarized build, add to
+  tauri.macos.conf.json under bundle.macOS:
+
+      "entitlements": "Entitlements.plist"
+
+  ...alongside a signingIdentity, and see README "Signing and notarization".
+-->
+<plist version="1.0">
+  <dict>
+    <!-- Outbound network access: required for the webview to reach Portal. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+  </dict>
+</plist>
