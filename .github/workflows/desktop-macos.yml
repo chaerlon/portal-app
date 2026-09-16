@@ -129,8 +129,21 @@ jobs:
             echo "::error::No .app bundle found under $BUNDLE_DIR/macos"
             exit 1
           fi
-          APP_NAME="$(basename "$APP_PATH" .app)"
-          BIN="$APP_PATH/Contents/MacOS/$APP_NAME"
+          PLIST="$APP_PATH/Contents/Info.plist"
+          if [ ! -f "$PLIST" ]; then
+            echo "::error::Bundle has no Info.plist: $PLIST"
+            exit 1
+          fi
+          EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST" 2>/dev/null || true)"
+          if [ -z "$EXECUTABLE_NAME" ]; then
+            echo "::error::CFBundleExecutable is missing from $PLIST"
+            exit 1
+          fi
+          BIN="$APP_PATH/Contents/MacOS/$EXECUTABLE_NAME"
+          if [ ! -x "$BIN" ]; then
+            echo "::error::Bundle executable is missing or not executable: $BIN"
+            exit 1
+          fi
           echo "Bundle:     $APP_PATH"
           echo "Executable: $BIN"
           lipo -archs "$BIN"
