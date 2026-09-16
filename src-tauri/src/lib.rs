@@ -99,7 +99,13 @@ pub fn run() {
     // notification IPC. Unset in every normal run.
     let mut bridge = WEBVIEW_BRIDGE.to_string();
     if std::env::var_os("CAELON_NOTIFY_SELFTEST").is_some() {
-        bridge.push_str(NOTIFY_SELFTEST);
+        // The result URL can redirect to Authentik. Keep this diagnostic on
+        // the configured Portal origin instead of probing auth-page IPC.
+        let portal_origin = serde_json::to_string(&portal_url.origin().ascii_serialization())
+            .expect("serialize Portal origin for notification diagnostic");
+        bridge.push_str(&format!(
+            "\n(function (portalOrigin) {{\n{NOTIFY_SELFTEST}\n}})({portal_origin});\n"
+        ));
         println!("[notify] self-test probe enabled");
     }
 

@@ -14,6 +14,10 @@
 (function () {
   "use strict";
 
+  // Rust supplies this lexical argument from the configured Portal URL.
+  // A result navigation can start OIDC; Authentik must never run this probe.
+  if (window.location.origin !== portalOrigin) return;
+
   function report(status, detail) {
     var url =
       window.location.origin +
