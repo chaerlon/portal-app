@@ -43,7 +43,7 @@ Windows background checks run alongside Phases 1-3 and must be completed before 
 
 Hosted Portal, authentication/navigation, real assignment notifications and close-to-tray lifecycle are reported as working. The previous review reran 22 Rust tests and 12 JavaScript tests successfully. These are baseline results, not proof that future changes pass.
 
-The repository is already pushed. The user authorized workflow-only commit `2b4ae20` after the original `81f5bee` baseline's bundle check failed; corrected baseline run `35148106411` passed the arm64 check and uploaded both artifacts. The remaining Phase 1 source changes are uncommitted, and their native macOS build and runtime results remain unverified.
+The repository is pushed. Workflow-only commit `2b4ae20` fixed the original baseline's bundle check. Phase 1 implementation was subsequently committed and pushed as `60b3c62`; cross-platform run `35150495894` and Apple Silicon test/build run `35150546312` both passed. Native Mac build, automated tests, architecture verification, and artifact uploads are verified for that commit. Interactive Mac runtime results remain pending.
 
 ## Phase 1: macOS readiness and build consistency
 
@@ -60,7 +60,7 @@ The repository is already pushed. The user authorized workflow-only commit `2b4a
 
 **Work:**
 
-- [x] Handle macOS `RunEvent::Reopen` by finding the existing `main` window and reusing `tray::reveal`; do not create a duplicate window or new Portal session. Native macOS compilation/runtime verification remains pending.
+- [x] Handle macOS `RunEvent::Reopen` by finding the existing `main` window and reusing `tray::reveal`; do not create a duplicate window or new Portal session. Native macOS compilation passed; interactive reopen verification remains pending.
 - [x] Keep close-to-hide behavior and reuse existing Show and Quit actions.
 - [x] On macOS, show the menu on icon click and avoid simultaneously toggling the window. Retain the Windows left-click toggle. The Windows policy is unit-tested; macOS UI verification remains pending.
 - [x] Load the template icon on macOS and enable template rendering. Tauri's pinned `image-png` requirement is explicitly enabled and the transparent PNG is embedded. Native macOS appearance verification remains pending.
@@ -74,7 +74,7 @@ The repository is already pushed. The user authorized workflow-only commit `2b4a
 
 **Decisions needed from the owner:** None for this phase. Use the agreed menu behavior and minimal template artwork for the test build.
 
-**Implementation status (uncommitted):** Windows `node --test tests/*.test.mjs`, `cargo test --locked`, and `pnpm tauri build --no-bundle` have passed. Native macOS compilation, artifact verification, menu/dock/icon runtime behavior, authentication, permissions, and background notification delivery remain pending the local Apple Silicon tester checklist. Do not mark Phase 1 complete from Windows checks alone.
+**Implementation status:** Phase 1 implementation, source review, and automated verification are complete for pushed commit `60b3c62`. Both test suites passed on Windows, Linux, and macOS. The Mac packaging job also passed both suites, built `aarch64-apple-darwin`, verified ARM64, and uploaded app/DMG artifacts. Phase 3 menu/dock/icon behavior, authentication, permissions, and background notification delivery remain pending the friend's Apple Silicon checklist.
 
 ## Phase 2: generate the unsigned macOS ARM64 build
 
@@ -84,14 +84,14 @@ The repository is already pushed. The user authorized workflow-only commit `2b4a
 
 **Work:**
 
-- [ ] Publish the reviewed implementation changes to the testing branch when implementation and publication are authorized.
-- [ ] Run the existing manual macOS workflow for the selected commit. Do not create a production release tag for the first test build.
-- [ ] Confirm the build uses `aarch64-apple-darwin` and the workflow's executable architecture check passes.
+- [x] Publish the reviewed implementation changes to the current `main` branch as authorized: `60b3c62`.
+- [x] Run the manual macOS workflow for the selected commit: `35150546312`. No production release tag was created.
+- [x] Confirm the build uses `aarch64-apple-darwin` and the executable architecture check passes.
 - [ ] Download the `.dmg` and archived `.app`; preserve executable permissions and symlinks when extracting the app archive.
-- [ ] Record the commit, workflow run, artifact names and install instructions in `docs/desktop-validation.md`.
+- [x] Record the commit, workflow runs, artifact names/digests and install instructions in `docs/desktop-validation.md`.
 - [ ] Install and launch the artifact on the available Apple Silicon Mac. Document any OS installation prompt or restriction encountered with the unsigned build.
 
-**Complete when:** The expected ARM64 artifacts exist and the owner can launch the selected build on Apple Silicon. Build success alone does not complete Phase 3.
+**Complete when:** The expected ARM64 artifacts exist and the tester can launch the selected build on Apple Silicon. Build success alone does not complete Phase 3.
 
 **Decisions needed from the owner:** None about signing for this milestone. Any GitHub publication or workflow action is handled separately when execution is requested.
 
@@ -208,4 +208,4 @@ Passing these commands establishes automated/build evidence only. Phase 3's manu
 
 ## Current next action
 
-Phase 1 implementation and source review are finished. The user has authorized committing and pushing the changes on the current `main` branch. Run both test suites and the ARM64 packaging workflow for that commit, then record the results. The owner's friend will perform interactive Mac validation; the owner uses Windows. Phases 1-4 make up the first tester milestone. Phases 5-7 are separately scoped follow-up work.
+Give the owner's friend the artifacts from successful run `35150546312` and have them record the Phase 3 Mac checklist. The owner uses Windows. Automated Phase 1 checks and Phase 2 artifact generation are finished; downloading/installing the artifacts and interactive Mac validation remain pending. Phases 1-4 make up the first tester milestone. Phases 5-7 are separately scoped follow-up work.
