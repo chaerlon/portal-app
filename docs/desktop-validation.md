@@ -1,10 +1,23 @@
 # Desktop validation for the Phase 1 test build
 
-The tester has an Apple Silicon Mac; the owner uses Windows. Phase 1 was committed and pushed on `main` as `60b3c62aea6c64dc52aaf468b3a8133f4cbfbdb7`. Automated Mac build/test validation passed on 2026-09-16. Interactive Mac runtime checks remain pending the tester's results.
+The tester has an Apple Silicon Mac; the owner uses Windows. Phase 1 was committed and pushed on `main` as `60b3c62aea6c64dc52aaf468b3a8133f4cbfbdb7`. The later automated runtime probes passed for `bb3b6eb822de620c4d0bd4d18805a2ac5821df7a` on 2026-09-16. Interactive acceptance checks remain pending the tester's results.
 
 The historical baseline workflow run [35147389712](https://github.com/chaerlon/portal-app/actions/runs/35147389712) compiled and bundled the baseline `.app` and `.dmg`, then failed in its post-build architecture check because it derived the executable name from `Caelon Portal.app`. The upload steps were skipped. Commit `2b4ae20` corrected that check to read `CFBundleExecutable` from `Contents/Info.plist`. Its follow-up baseline run [35148106411](https://github.com/chaerlon/portal-app/actions/runs/35148106411) passed the arm64 check and uploaded both artifacts. That run preceded Phase 1; the recorded Phase 1 runs below provide the current automated evidence.
 
 ## Validate the pushed source
+
+### Latest automated runtime evidence — 2026-09-16
+
+- Source commit: `bb3b6eb822de620c4d0bd4d18805a2ac5821df7a`.
+- [Cross-platform test run 35153462732](https://github.com/chaerlon/portal-app/actions/runs/35153462732): success; the JavaScript and locked Rust suites passed on Ubuntu, Windows, and macOS. Local verification also passed all 37 JavaScript, 24 Rust, and 19 smoke-harness tests.
+- [Apple Silicon build/runtime run 35153465513](https://github.com/chaerlon/portal-app/actions/runs/35153465513): ARM64 tests, release packaging, architecture verification, and runtime probes passed. The packaged executable ran in a native `arm64` desktop session, reported initial visibility, hid, revealed, and exited with code zero through the Quit helper. A separate process reported one Portal-origin `ok` notification sentinel; the request reached native IPC and was accepted/enqueued.
+- [Latest app archive](https://github.com/chaerlon/portal-app/actions/runs/35153465513/artifacts/10470550726): artifact ZIP SHA-256 `10d5952a85641270eec55645eb3c4e9370b3e92f732891a405c8e5fa043cd085`.
+- [Latest DMG](https://github.com/chaerlon/portal-app/actions/runs/35153465513/artifacts/10470491022): artifact ZIP SHA-256 `2ec657c989f9357c53cf1b81f197f8e34ef4f5439057403facc89cd3e308703b`.
+- [Runtime logs, JSON, and screenshots](https://github.com/chaerlon/portal-app/actions/runs/35153465513/artifacts/10469524999): artifact ZIP SHA-256 `f9b3ab9c9097a7f2f501a5eb70a9279d815adcd6e9b0786e854d7d84a38f0dc3`; downloaded evidence digest verified locally. Inspected screenshots show the Portal loading UI and Authentik sign-in screen in the app window. No notification banner appears in these captures; OS delivery is unverified. The early lifecycle screenshot shows the desktop, so lifecycle transitions are supported by the probe logs rather than that image.
+
+The first runtime run [35152552544](https://github.com/chaerlon/portal-app/actions/runs/35152552544) correctly failed on conflicting results: Portal reported `ok`, then the result navigation redirected to Authentik, where the diagnostic ran again and hit the notification ACL restriction. The fix confines the opt-in diagnostic to the configured Portal origin; permissions and strict validation remain unchanged. Six tests execute the actual diagnostic script, including this redirect-origin regression.
+
+Use the latest artifacts above for the tester. These checks establish runner launch and helper behavior, not installation on the friend's Mac, authenticated Portal interactions, actual menu/Dock/close events, visible alerts, hidden-window delivery, or sleep/wake recovery. The manual checklist below remains open.
 
 ### Recorded automated results — 2026-09-16
 
