@@ -5,6 +5,13 @@
 Builds the Tauri desktop client in `caelon-desktop/` for `aarch64-apple-darwin`
 and uploads the `.app` and `.dmg` as workflow artifacts.
 
+After artifact upload, it launches the packaged app through the opt-in lifecycle
+and notification probes. Runtime results, logs, and available screenshots are
+uploaded as `caelon-portal-macos-smoke-evidence`, including on smoke failure.
+Startup/lifecycle failures and unverified required notification IPC make the job
+fail. Screenshot availability is recorded separately. A passed notification
+probe proves IPC request acceptance, not native banner delivery or OS permission.
+
 ### Triggers
 
 | Trigger | When |
@@ -19,8 +26,8 @@ plus DMG packaging is too slow to sit in the normal push path.
 
 - `caelon-desktop/pnpm-lock.yaml` must be committed. The install step uses
   `--frozen-lockfile`, so a missing lockfile fails with `ERR_PNPM_NO_LOCKFILE`.
-- If `packageManager` is ever added to `caelon-desktop/package.json`, remove the
-  `version:` input from the `pnpm/action-setup` step — declaring both is an error.
+- `pnpm/action-setup` reads the pinned version from `packageManager` in
+  `package.json`; do not also specify its `version:` input.
 
 ### Portal URL
 

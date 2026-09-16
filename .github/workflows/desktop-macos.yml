@@ -86,6 +86,9 @@ jobs:
       - name: Run JavaScript tests
         run: node --test tests/*.test.mjs
 
+      - name: Run smoke harness tests
+        run: python3 -m unittest discover -s tests -p 'test_smoke_macos.py' -v
+
       - name: Run Rust tests (Apple Silicon)
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --target aarch64-apple-darwin
 
@@ -184,6 +187,22 @@ jobs:
           name: caelon-portal-macos-aarch64-dmg
           path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Launch app and check lifecycle and native notification submission
+        timeout-minutes: 4
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find src-tauri/target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          python3 scripts/smoke-macos.py --app "$APP_PATH" --output-dir output/macos-smoke --timeout 60
+
+      - name: Upload runtime smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: caelon-portal-macos-smoke-evidence
+          path: output/macos-smoke/
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Installation notes

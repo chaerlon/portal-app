@@ -5,6 +5,10 @@ src-tauri/gen/schemas/
 # Node
 node_modules/
 
+# Python smoke harness
+__pycache__/
+*.pyc
+
 # OS
 .DS_Store
 Thumbs.db

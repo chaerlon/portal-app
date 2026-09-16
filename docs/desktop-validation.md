@@ -23,7 +23,20 @@ xattr -dr com.apple.quarantine "Caelon Portal.app"
 open "Caelon Portal.app"
 ```
 
-The workflows did not launch the GUI. Login, lifecycle interactions, menu/icon appearance, and notification delivery are unverified until the manual cases below are recorded.
+Those recorded build runs did not launch the GUI. They do not establish login, lifecycle interactions, menu/icon appearance, or notification delivery.
+
+### Automated runtime probes
+
+The current macOS workflow also launches the packaged application on the runner's desktop session, with no human input. It uses the existing opt-in probes and runs two processes separately:
+
+- Lifecycle: require startup/window readiness, initial visibility, successful hide/reveal, and clean Quit. This exercises the helpers directly, not physical dock/menu clicks or the close event.
+- Notification IPC: require a result from the remote Portal page's permission/notify calls; denial, missing IPC, process failure, or no conclusive result is not a pass.
+
+The `caelon-portal-macos-smoke-evidence` artifact contains structured results, logs, and available screenshots; screenshot failure is recorded. Probes have time limits and clean up their processes. App/DMG uploads happen first, so a runtime failure does not discard the build artifacts.
+
+Pinned `tauri-plugin-notification` 2.4.0 returns Granted for desktop permission queries. It also starts OS delivery asynchronously and discards its result. An `ok` sentinel proves the remote origin reached notification IPC and the plugin accepted the request, not that macOS allowed or displayed an alert. Screenshots are supporting evidence only until inspected. OS permission flow, visible banner delivery, real backend assignments, login/session persistence, physical dock/menu gestures, and sleep/wake/reconnect remain manual acceptance cases.
+
+Bridge integration tests exercise the shipped filter and fetch bridge with real response streams and simulated browser/IPC boundaries. They cover permission branches, focused suppression, notification payloads, deduplication, and preserving Portal's fetch responses; they do not log in or change live Portal data.
 
 The macOS workflow runs JavaScript and locked ARM64 Rust tests, builds the app and DMG, verifies the executable architecture, and uploads both artifacts. Record the commit and workflow run for the downloaded build. The separate test workflow runs both suites on Ubuntu, Windows, and macOS.
 

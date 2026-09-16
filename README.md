@@ -130,6 +130,20 @@ menu-bar, icon, login, permission, and notification checks in
 [`docs/desktop-validation.md`](docs/desktop-validation.md). Those runtime checks
 remain separate evidence from successful compilation.
 
+The macOS workflow also launches the packaged app using the opt-in tray and
+notification diagnostics. `scripts/smoke-macos.py` checks startup, hide/reveal,
+clean Quit, and whether the remote Portal page can reach notification IPC. It
+uploads JSON results, process logs, and available screenshots as
+`caelon-portal-macos-smoke-evidence`. It uses the runner's desktop session without
+a person clicking; it is not a display-free replacement for macOS.
+
+The pinned desktop notification plugin reports permission as granted and queues
+delivery asynchronously without returning the OS delivery result. A successful
+notification probe therefore proves IPC request acceptance only. Banner display,
+real assignment delivery, OS notification settings, and sleep/wake behavior
+still need the manual checks. Bridge integration tests simulate browser/IPC
+boundaries and do not prove native delivery.
+
 ---
 
 ## How the Portal URL is configured
