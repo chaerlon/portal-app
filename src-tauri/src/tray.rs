@@ -10,15 +10,17 @@
 //! capability is involved, and the page has no way to observe or drive it.
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Manager, Runtime, WebviewWindow, WindowEvent,
 };
 
+use crate::autostart;
 use crate::{WINDOW_LABEL, WINDOW_TITLE};
 
 const TRAY_ID: &str = "main";
 const MENU_SHOW: &str = "tray.show";
+const MENU_AUTOSTART: &str = "tray.autostart";
 const MENU_QUIT: &str = "tray.quit";
 
 /// What a left-click on the tray icon should do.
@@ -126,25 +128,62 @@ pub fn hide_on_close<R: Runtime>(window: &WebviewWindow<R>) {
     });
 }
 
+/// Point the "Start at login" checkmark at what the OS actually reports.
+///
+/// The app keeps no local copy of the setting. A login item can be removed
+/// outside the app -- Task Manager's Startup tab on Windows, System Settings >
+/// General > Login Items on macOS -- so a remembered bool would drift and the
+/// menu would start lying. Every read goes back to the source.
+fn sync_autostart_check<R: Runtime>(item: &CheckMenuItem<R>, app: &AppHandle<R>) {
+    let enabled = autostart::is_enabled(app);
+    if let Err(e) = item.set_checked(enabled) {
+        eprintln!("[tray] failed to update 'Start at login' checkmark: {e}");
+    }
+}
+
 /// Build the tray icon and its menu.
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, MENU_SHOW, "Show Caelon Portal", true, None::<&str>)?;
+    // The checkmark is seeded from the OS, not from a default constant: by the
+    // time the menu is built the first-run default has already been applied (or
+    // deliberately not applied), and the login item may also have been removed
+    // behind the app's back.
+    let start_at_login = CheckMenuItem::with_id(
+        app,
+        MENU_AUTOSTART,
+        "Start at login",
+        true,
+        autostart::is_enabled(app),
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &start_at_login, &quit])?;
 
     let click_behavior = tray_icon_click_behavior(cfg!(target_os = "macos"));
+    let on_menu = start_at_login.clone();
+    let on_hover = start_at_login.clone();
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip(WINDOW_TITLE)
         .menu(&menu)
         // macOS convention is for the menu-bar icon to open its menu. Windows
         // preserves the existing left-click show/hide toggle.
         .show_menu_on_left_click(matches!(click_behavior, TrayIconClickBehavior::OpenMenu))
-        .on_menu_event(|app, event| match event.id.as_ref() {
+        .on_menu_event(move |app, event| match event.id.as_ref() {
             MENU_SHOW => {
                 if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
                     println!("[tray] menu -> show");
                     reveal(&window);
                 }
+            }
+            MENU_AUTOSTART => {
+                // Read, flip, write, then re-read. The re-read is the point: if
+                // the write failed -- a locked registry key, a read-only
+                // LaunchAgents directory -- the tick must go back to what the
+                // OS actually reports rather than to what was requested.
+                let desired = autostart::toggled(autostart::is_enabled(app));
+                println!("[tray] menu -> start at login = {desired}");
+                autostart::set_enabled(app, desired);
+                sync_autostart_check(&on_menu, app);
             }
             MENU_QUIT => {
                 println!("[tray] menu -> quit");
@@ -153,6 +192,15 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(move |tray, event| {
+            // Pointer entering the icon is the last moment before the menu can
+            // be opened by either platform's gesture, so it is where the
+            // checkmark is refreshed against the OS. `Move` is deliberately not
+            // used: it fires continuously while hovering, and each refresh is a
+            // registry or filesystem read.
+            if matches!(event, TrayIconEvent::Enter { .. }) {
+                sync_autostart_check(&on_hover, tray.app_handle());
+            }
+
             if matches!(click_behavior, TrayIconClickBehavior::ToggleWindow) {
                 // A click reports both press and release; reacting to one of
                 // them keeps a single Windows click from toggling twice.

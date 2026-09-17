@@ -4,13 +4,16 @@
 //! exactly one window plus a tray icon, points the window at the Portal origin,
 //! and enforces a navigation policy. It exposes no custom commands of its own.
 
+mod autostart;
 mod navigation;
 mod tray;
 
 use navigation::{Decision, Policy};
+use tauri::utils::config::BackgroundThrottlingPolicy;
 #[cfg(target_os = "macos")]
 use tauri::Manager;
 use tauri::{WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_autostart::MacosLauncher;
 
 /// The start URL for the main window.
 ///
@@ -112,6 +115,15 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        // Registers the login item so a rebooted machine starts delivering
+        // notifications without the user remembering to launch the app. The
+        // plugin only manages state here; the tray menu drives it (see
+        // `autostart`). No extra launch arguments: the app has no
+        // "started from login" behaviour to distinguish.
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(move |app| {
             let policy = policy.clone();
 
@@ -124,6 +136,23 @@ pub fn run() {
             .inner_size(1280.0, 832.0)
             .min_inner_size(900.0, 600.0)
             .resizable(true)
+            // Hidden-to-tray is this app's normal resting state, and an
+            // off-screen webview is otherwise treated as a background tab:
+            // timers get clamped, then the view is suspended outright after
+            // roughly five minutes. Portal's notification delivery runs on that
+            // page, so suspending it stops notifications.
+            //
+            // This does NOT work on Windows. Verified against the pinned
+            // sources: wry 0.55.1 implements `background_throttling` only in
+            // `src/wkwebview/mod.rs` -- macOS 14+ / iOS 17+, via the
+            // WKPreferences `inactiveSchedulingPolicy` -- and ships no WebView2
+            // or WebKitGTK equivalent. On Windows and Linux the call compiles
+            // and costs nothing but has no effect, so whatever throttles a
+            // hidden webview there is still throttling it. Kept because it is
+            // correct on macOS and starts working elsewhere if wry grows
+            // support -- but it is not the Windows fix, and the Windows
+            // hidden-window notification gap remains open.
+            .background_throttling(BackgroundThrottlingPolicy::Disabled)
             .initialization_script(&bridge)
             .on_navigation(move |url| match policy.decide(url) {
                 Decision::Allow => {
@@ -148,6 +177,7 @@ pub fn run() {
             // notifications keep arriving; the tray is then the only way back
             // to the window, and the only way out of the app.
             tray::hide_on_close(&window);
+            autostart::apply_first_run_default(app.handle());
             tray::build(app.handle())?;
 
             if let Some(mode) = std::env::var_os("CAELON_TRAY_SELFTEST") {

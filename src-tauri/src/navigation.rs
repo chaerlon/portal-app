@@ -224,7 +224,10 @@ mod tests {
             decide_str("https://staging.caelonhq.com/"),
             Decision::OpenExternally
         );
-        assert_eq!(decide_str("https://caelonhq.com/"), Decision::OpenExternally);
+        assert_eq!(
+            decide_str("https://caelonhq.com/"),
+            Decision::OpenExternally
+        );
     }
 
     #[test]

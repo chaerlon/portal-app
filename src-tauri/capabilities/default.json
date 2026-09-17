@@ -1,7 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal capability for the local shell window. NOTE: this capability deliberately has no `remote` field. Under Tauri v2, remotely-loaded content can only reach the IPC bridge if its origin is listed in a capability's `remote.urls`. Omitting it means the Portal origin has ZERO access to Tauri commands, which is the primary security property of this POC. Do not add a `remote` entry without a specific reviewed reason.",
+  "description": "Minimal capability for the local shell window. NOTE: this capability deliberately has no `remote` field. Under Tauri v2, remotely-loaded content can only reach the IPC bridge if its origin is listed in a capability's `remote.urls`. Omitting it means the Portal origin has ZERO access to Tauri commands, which is the primary security property of this POC. Do not add a `remote` entry without a specific reviewed reason. The autostart permissions below are here, and NOT in `portal-notifications.json`, precisely because that file is the one that names the remote Portal origin: the 'Start at login' toggle is driven from the Rust tray menu, so the hosted page must never be able to register or remove a login item.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
+  ]
 }
