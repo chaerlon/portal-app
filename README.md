@@ -146,6 +146,91 @@ boundaries and do not prove native delivery.
 
 ---
 
+## Production build — Windows (x64)
+
+On Windows, with the prerequisites above:
+
+```powershell
+pnpm install
+pnpm tauri build
+```
+
+`bundle.targets` is `"all"`, so a single build produces both installers with no
+extra configuration:
+
+```
+src-tauri\target\release\bundle\msi\Caelon Portal_0.1.0_x64_en-US.msi
+src-tauri\target\release\bundle\nsis\Caelon Portal_0.1.0_x64-setup.exe
+```
+
+The **MSI** is the one to hand anyone who deploys software centrally: `msiexec`,
+Intune, and Group Policy all consume MSIs, and none of them take an NSIS
+installer. The `-setup.exe` is a per-user alternative for a one-off install.
+
+```powershell
+msiexec /i "Caelon-Portal_0.1.0_x64_en-US.msi" /qn   # silent
+```
+
+Installing is also the only way to see notifications on Windows — see
+[Windows: no toast appears in dev](#windows-no-toast-appears-in-dev-and-that-is-expected).
+
+### Publishing the MSI as a download
+
+`.github/workflows/desktop-windows.yml` builds both installers on a
+`windows-latest` runner and, on a `desktop-v*` tag, attaches them to a GitHub
+Release together with a `SHA256SUMS.txt`. That release asset **is** the download
+link — no separate hosting.
+
+To cut one, bump `version` in *both* `src-tauri/tauri.conf.json` and
+`src-tauri/Cargo.toml`, then:
+
+```bash
+git tag desktop-v0.1.0
+git push origin desktop-v0.1.0
+```
+
+The workflow refuses to build when the tag disagrees with either version. That is
+not pedantry: an MSI's ProductVersion comes from `tauri.conf.json`, never from
+the tag, and Windows keys its upgrade logic on ProductVersion — so a 0.1.0 MSI
+published under a `desktop-v0.2.0` tag installs fine and then quietly refuses to
+be upgraded over later.
+
+A **workflow_dispatch** run builds the same installers but stops at workflow
+artifacts (14-day retention, GitHub login required to download) and publishes no
+release. Use it to test a build, optionally overriding the compiled-in
+`portal_url`. Only a tag produces a public download.
+
+Assets are renamed from `Caelon Portal_…` to `Caelon-Portal_…` before upload,
+because GitHub turns every space in a release asset name into a dot.
+
+Note that `desktop-v*` also triggers `desktop-macos.yml`, so one tag builds both
+platforms — but the macOS workflow only uploads workflow artifacts. A tagged
+release therefore carries Windows installers and no `.dmg` until that workflow
+grows a publish step of its own.
+
+### SmartScreen
+
+The build is **unsigned**. Microsoft Defender SmartScreen shows "Windows
+protected your PC" for any installer without an Authenticode signature and
+without established download reputation; the **Run anyway** button is hidden
+until the user clicks **More info** first. Publish `SHA256SUMS.txt` alongside the
+installer so people can at least verify what they downloaded.
+
+Signing on Windows is **not** the Apple flow. The Tauri CLI reads no certificate
+from the environment — it shells out to `signtool`, which resolves the
+certificate from the Windows certificate store by thumbprint. Enabling it takes
+two coordinated changes: a `certificateThumbprint` (plus `digestAlgorithm` and
+`timestampUrl`) under `bundle.windows` in `tauri.conf.json`, and a step that
+imports the `.pfx` into the runner's store before the build. Both are written out
+in the commented block in `desktop-windows.yml`.
+
+An EV certificate on a hardware token cannot be imported that way at all — the
+private key never leaves the token. For EV, use a cloud signing service (Azure
+Trusted Signing, DigiCert KeyLocker) and point `bundle.windows.signCommand` at
+its CLI instead.
+
+---
+
 ## How the Portal URL is configured
 
 One place, one source of truth: `src-tauri/src/lib.rs`.

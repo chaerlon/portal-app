@@ -1,0 +1,323 @@
+# Builds the Caelon Portal Tauri desktop client for 64-bit Windows and, on a
+# release tag, publishes the installers as downloadable GitHub Release assets.
+#
+# The MSI is the headline download: it is what Intune, Group Policy, and
+# `msiexec /i ... /qn` consume, so it is the shape an IT department can actually
+# deploy. The NSIS `-setup.exe` ships alongside it for one-off per-user installs.
+# Both fall out of a single `tauri build` because `bundle.targets` is "all"; no
+# configuration change is needed to produce them.
+#
+# Runner choice: `windows-latest` is x86_64. We pass `--target
+# x86_64-pc-windows-msvc` explicitly rather than relying on the host default for
+# the same reason desktop-macos.yml pins `macos-14`: if GitHub ever repoints the
+# `windows-latest` alias at an arm64 image, an implicit build would silently
+# start emitting arm64 installers under the same file names. Pinning makes that
+# a loud failure instead.
+#
+# WebView2 and the MSVC C++ toolchain are preinstalled on the runner. Tauri
+# downloads the WiX toolset itself on the first build, so there is no separate
+# install step for it.
+
+name: Desktop — Windows (x64)
+
+on:
+  # Manual runs, with an optional override of the URL compiled into the binary.
+  workflow_dispatch:
+    inputs:
+      portal_url:
+        description: "Portal URL compiled into the app (CAELON_PORTAL_URL)"
+        required: false
+        type: string
+        default: "https://portal.caelonhq.com/auth/sign-in?error=account_not_linked"
+  # Release builds are tag-driven. Deliberately NOT on every push to main —
+  # a full Rust release build plus WiX/NSIS packaging is far too slow for that.
+  push:
+    tags:
+      - "desktop-v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build .msi + .exe (x86_64-pc-windows-msvc)
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    # Write access is needed only by the final "Publish GitHub Release" step, and
+    # only on tag pushes. It is granted at job scope because GitHub has no
+    # step-scoped permissions; every other step here only reads.
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Guards against shipping an installer whose internal version disagrees
+      # with the tag people downloaded it under. The MSI's ProductVersion comes
+      # from `version` in tauri.conf.json, NOT from the git tag, so pushing
+      # desktop-v0.2.0 without bumping the config would publish a
+      # "Caelon-Portal_0.1.0_x64_en-US.msi" under a 0.2.0 release — and Windows
+      # would then refuse to upgrade over it later, because MSI upgrade logic
+      # keys on ProductVersion. Fail loudly up front, not 40 minutes in.
+      - name: Verify tag matches configured version
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        shell: pwsh
+        # The tag name arrives through the environment rather than being
+        # interpolated into the script body: `${{ }}` substitution happens before
+        # PowerShell ever parses the line, so a crafted tag name would otherwise
+        # be executable text rather than data.
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tagVersion = $env:TAG_NAME -replace '^desktop-v', ''
+          $configVersion = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargoVersion = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"(.+)"' |
+            Select-Object -First 1).Matches[0].Groups[1].Value
+
+          Write-Host "tag:              $tagVersion"
+          Write-Host "tauri.conf.json:  $configVersion"
+          Write-Host "Cargo.toml:       $cargoVersion"
+
+          if ($tagVersion -ne $configVersion) {
+            Write-Host "::error::Tag desktop-v$tagVersion does not match version $configVersion in src-tauri/tauri.conf.json. Bump the config and re-tag."
+            exit 1
+          }
+          # Tauri prefers tauri.conf.json's version, so a drifting Cargo.toml is
+          # not fatal to the bundle — but it makes cargo and the installer
+          # disagree about what this build is. Keep them in lockstep.
+          if ($cargoVersion -ne $configVersion) {
+            Write-Host "::error::src-tauri/Cargo.toml is $cargoVersion but tauri.conf.json is $configVersion. Keep them in lockstep."
+            exit 1
+          }
+
+      # pnpm must be installed BEFORE setup-node, because setup-node's
+      # `cache: pnpm` needs the pnpm binary on PATH to resolve the store path.
+      #
+      # No `version` input on purpose: pnpm/action-setup@v4 reads the version from
+      # the `packageManager` field in package.json. Passing `version` here as
+      # well makes the action error out when the two disagree.
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Rust (stable, x86_64-pc-windows-msvc)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # Requires a committed pnpm-lock.yaml. If this step fails with
+      # ERR_PNPM_NO_LOCKFILE, commit the lockfile rather than dropping
+      # --frozen-lockfile.
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run JavaScript tests
+        shell: bash
+        run: node --test tests/*.test.mjs
+
+      - name: Run Rust tests (x64)
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc
+
+      # ---------------------------------------------------------------------
+      # CODE SIGNING — intentionally disabled for the POC.
+      #
+      # Windows signing does NOT work like the Apple path in desktop-macos.yml.
+      # The Tauri CLI reads no certificate from the environment; it shells out to
+      # signtool, which looks the certificate up in the Windows certificate store
+      # by thumbprint. Enabling it therefore takes two coordinated changes, not
+      # just adding secrets:
+      #
+      #   1. Add to `bundle.windows` in src-tauri/tauri.conf.json:
+      #        "certificateThumbprint": "<40 hex chars>",
+      #        "digestAlgorithm": "sha256",
+      #        "timestampUrl": "http://timestamp.digicert.com"
+      #      The timestamp URL matters: without it every signature stops
+      #      validating the day the certificate expires, instead of staying
+      #      valid for binaries signed while it was live.
+      #
+      #   2. Uncomment the import step below — it must run BEFORE the build step,
+      #      since signing happens during bundling — and add two repository
+      #      secrets:
+      #        WINDOWS_CERTIFICATE           base64 of the .pfx
+      #        WINDOWS_CERTIFICATE_PASSWORD  password for that .pfx
+      #
+      # - name: Import code-signing certificate
+      #   if: startsWith(github.ref, 'refs/tags/desktop-v')
+      #   shell: pwsh
+      #   env:
+      #     WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      #     WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      #   run: |
+      #     $ErrorActionPreference = 'Stop'
+      #     $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+      #     [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+      #     $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+      #     $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+      #     Remove-Item $pfx -Force
+      #     Write-Host "Imported thumbprint: $($cert.Thumbprint)"
+      #
+      # An EV certificate on a hardware token cannot be imported this way at all
+      # — its private key never leaves the token. For EV, use a cloud signing
+      # service (Azure Trusted Signing, DigiCert KeyLocker) and point
+      # `bundle.windows.signCommand` at that service's CLI instead of using a
+      # thumbprint.
+      # ---------------------------------------------------------------------
+
+      - name: Build Windows bundles
+        env:
+          # Compile-time constant baked into the Rust binary. The `||` fallback
+          # covers the tag-push path, where `inputs` is empty.
+          # src-tauri/build.rs declares `cargo:rerun-if-env-changed=CAELON_PORTAL_URL`,
+          # so changing this correctly invalidates the cached build.
+          CAELON_PORTAL_URL: ${{ inputs.portal_url || 'https://portal.caelonhq.com/auth/sign-in?error=account_not_linked' }}
+        run: pnpm tauri build --target x86_64-pc-windows-msvc
+
+      # Fails loudly if a bundle is missing or was built for the wrong
+      # architecture, instead of silently publishing a broken installer. The
+      # analogue of the `lipo -archs` check in desktop-macos.yml: read the PE
+      # header's machine field, where 0x8664 is x64 and 0xAA64 would be arm64.
+      - name: Verify bundles
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleDir = 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle'
+
+          $msi = Get-ChildItem -Path "$bundleDir/msi" -Filter *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
+          $nsis = Get-ChildItem -Path "$bundleDir/nsis" -Filter *-setup.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $msi) { Write-Host "::error::No .msi found under $bundleDir/msi"; exit 1 }
+          if (-not $nsis) { Write-Host "::error::No NSIS -setup.exe found under $bundleDir/nsis"; exit 1 }
+
+          $exe = "src-tauri/target/x86_64-pc-windows-msvc/release/caelon-desktop.exe"
+          if (-not (Test-Path $exe)) { Write-Host "::error::Application binary is missing: $exe"; exit 1 }
+
+          # PE layout: the offset of the NT header sits at 0x3C, and the 2-byte
+          # machine field is the first thing after its 4-byte "PE\0\0" signature.
+          $bytes = [IO.File]::ReadAllBytes((Resolve-Path $exe).Path)
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          Write-Host ("Binary:  {0}" -f $exe)
+          Write-Host ("Machine: 0x{0:X4}" -f $machine)
+          if ($machine -ne 0x8664) {
+            Write-Host ("::error::Expected an x64 binary (0x8664) but the PE machine field is 0x{0:X4}" -f $machine)
+            exit 1
+          }
+
+          foreach ($f in @($msi, $nsis)) {
+            $hash = (Get-FileHash $f.FullName -Algorithm SHA256).Hash
+            Write-Host ("{0}  {1} bytes  sha256={2}" -f $f.Name, $f.Length, $hash)
+          }
+
+      # Tauri names its output with the product name verbatim, so the files
+      # contain a space: "Caelon Portal_0.1.0_x64_en-US.msi". GitHub substitutes
+      # a dot for every space in a release asset name, yielding the mangled
+      # download "Caelon.Portal_0.1.0_x64_en-US.msi". Staging the files under
+      # hyphenated names keeps the public download URL clean and predictable.
+      - name: Stage release assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleDir = 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle'
+          New-Item -ItemType Directory -Path dist-release -Force | Out-Null
+
+          $sources = @()
+          $sources += Get-ChildItem -Path "$bundleDir/msi" -Filter *.msi
+          $sources += Get-ChildItem -Path "$bundleDir/nsis" -Filter *-setup.exe
+          foreach ($f in $sources) {
+            Copy-Item $f.FullName (Join-Path 'dist-release' ($f.Name -replace ' ', '-'))
+          }
+
+          # A checksum manifest, so whoever downloads an unsigned installer has
+          # something to verify it against.
+          Get-ChildItem dist-release -File |
+            ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $_.Name } |
+            Set-Content -Path dist-release/SHA256SUMS.txt -Encoding ascii
+
+          Get-ChildItem dist-release -File | Format-Table Name, Length | Out-String | Write-Host
+
+      - name: Upload .msi
+        uses: actions/upload-artifact@v4
+        with:
+          name: caelon-portal-windows-x64-msi
+          path: dist-release/*.msi
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: caelon-portal-windows-x64-nsis
+          path: dist-release/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      # Only on a desktop-v* tag. Workflow-dispatch runs stop at the artifacts
+      # above, so a manual build pointed at a staging portal_url can never become
+      # a public download by accident.
+      #
+      # This publishes immediately. Set `draft: true` to have the release land
+      # unlisted for review instead, at the cost of the download link not
+      # existing until someone presses Publish in the GitHub UI.
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-release/*.msi
+            dist-release/*-setup.exe
+            dist-release/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          draft: false
+          body: |
+            Windows desktop client, 64-bit.
+
+            **Download `Caelon-Portal_*_x64_en-US.msi`** for the standard install
+            — it is also what Intune and Group Policy deploy. The `*-setup.exe`
+            is an NSIS per-user alternative.
+
+            These installers are **unsigned**. SmartScreen will show "Windows
+            protected your PC"; choose **More info** → **Run anyway**. Verify the
+            download against `SHA256SUMS.txt` first.
+
+      - name: Installation notes
+        shell: bash
+        run: |
+          cat <<'NOTES'
+          ============================================================
+          These installers are UNSIGNED.
+
+          Microsoft Defender SmartScreen shows "Windows protected your
+          PC" for any installer lacking an Authenticode signature and
+          established reputation. Users must click "More info" and then
+          "Run anyway" -- that button stays hidden until they do.
+
+          Silent / managed install of the MSI:
+
+            msiexec /i "Caelon-Portal_0.1.0_x64_en-US.msi" /qn
+
+          Notifications only work from an INSTALLED build: Windows
+          requires a registered AppUserModelID, which the installer
+          creates via its Start Menu shortcut. Running the raw .exe out
+          of target/release produces no toasts.
+
+          The real fix for SmartScreen is an Authenticode certificate --
+          see the commented signing block in this workflow.
+          ============================================================
+          NOTES

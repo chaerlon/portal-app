@@ -2,6 +2,9 @@
 src-tauri/target/
 src-tauri/gen/schemas/
 
+# Staging dir the Windows release workflow copies renamed installers into
+dist-release/
+
 # Node
 node_modules/
 

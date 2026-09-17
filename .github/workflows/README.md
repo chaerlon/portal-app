@@ -59,6 +59,66 @@ The architecture check reads `CFBundleExecutable` from each generated app's
 `Contents/Info.plist` instead of assuming the `.app` directory name matches the
 Cargo binary name.
 
+## `desktop-windows.yml` — Caelon Portal desktop, Windows x64
+
+Builds the Tauri desktop client on `windows-latest` and produces both installers
+that `bundle.targets: "all"` already yields: the WiX `.msi` and the NSIS
+`-setup.exe`. No configuration change was needed to get an MSI; the workflow
+exists to make that MSI *downloadable*.
+
+### Triggers
+
+| Trigger | When | Output |
+|---|---|---|
+| `workflow_dispatch` | Manual. Optional `portal_url` input overrides the URL compiled into the binary. | Workflow artifacts only (14 days). No release. |
+| `push` on tag `desktop-v*` | Release builds, e.g. `desktop-v0.1.0`. | Artifacts **and** a published GitHub Release with both installers plus `SHA256SUMS.txt`. |
+
+Only a tag can produce a public download, so a manual build pointed at a staging
+`portal_url` cannot become one by accident. The release step is the only reason
+the job requests `contents: write`; GitHub has no step-scoped permissions, so the
+grant sits at job scope.
+
+The release is published, not drafted. Flip `draft: true` on the
+`softprops/action-gh-release` step to have it land unlisted for review instead —
+at the cost of the download URL not existing until someone presses Publish.
+
+### Version guard
+
+A tag build fails immediately unless the tag version matches `version` in
+**both** `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`. An MSI's
+ProductVersion is read from the config rather than the tag, and Windows keys MSI
+upgrade logic on ProductVersion — so a mismatched pair publishes an installer
+that later refuses to be upgraded over. `desktop-macos.yml` has no equivalent
+check because a `.dmg` carries no comparable upgrade semantics.
+
+### Asset naming
+
+Tauri names bundles after the product name verbatim, which puts a space in
+`Caelon Portal_0.1.0_x64_en-US.msi`. GitHub replaces every space in a release
+asset name with a dot, so the files are copied to a `dist-release/` staging
+directory under hyphenated names first. That keeps the public download URL clean.
+
+### Architecture check
+
+The analogue of `lipo -archs` in the macOS workflow: it reads the PE header's
+machine field from the built `caelon-desktop.exe` (the NT header offset lives at
+`0x3C`; the machine word follows the 4-byte `PE\0\0` signature) and fails unless
+it is `0x8664`. The build also pins `--target x86_64-pc-windows-msvc` rather than
+trusting the host default, so a future arm64 `windows-latest` image cannot
+silently ship arm64 binaries under x64 file names.
+
+### Signing
+
+The POC builds **unsigned**, and SmartScreen will warn on every download.
+
+Enabling signing is *not* the Apple flow — the Tauri CLI reads no certificate
+from the environment. `signtool` resolves the certificate from the Windows
+certificate store by thumbprint, so it takes two coordinated changes: a
+`certificateThumbprint` under `bundle.windows` in `tauri.conf.json`, and a
+`.pfx` import step that runs before the build. Both are spelled out in the
+commented block on the build step, including why an EV hardware token needs
+`signCommand` and a cloud signing service instead.
+
 ## `test.yml` â€” cross-platform checks
 
 Runs on Ubuntu, Windows, and `macos-14` for pushes, pull requests, and manual
