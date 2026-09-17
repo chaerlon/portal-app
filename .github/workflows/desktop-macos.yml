@@ -43,6 +43,12 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 45
 
+    # Write access is needed only by the final "Publish .dmg to GitHub Release"
+    # step, and only on tag pushes. It sits at job scope because GitHub has no
+    # step-scoped permissions; every other step here only reads.
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -204,6 +210,52 @@ jobs:
           path: output/macos-smoke/
           if-no-files-found: warn
           retention-days: 14
+
+      # Tauri names the DMG after the product name verbatim, so it contains a
+      # space: "Caelon Portal_0.1.0_aarch64.dmg". GitHub substitutes a dot for
+      # every space in a release asset name, which would publish the mangled
+      # download "Caelon.Portal_0.1.0_aarch64.dmg". Staging it under a
+      # hyphenated name first keeps the public URL clean, exactly as
+      # desktop-windows.yml does for the .msi.
+      #
+      # The checksum file is deliberately NOT called SHA256SUMS.txt: both
+      # workflows publish into the SAME release for a given desktop-v* tag, and
+      # two assets with one name would silently overwrite each other.
+      - name: Stage release asset
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        run: |
+          set -euo pipefail
+          mkdir -p dist-release
+          for f in src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg; do
+            cp "$f" "dist-release/$(basename "$f" | tr ' ' '-')"
+          done
+          # Run from inside the staging dir so the glob yields bare file names.
+          # Hashing "./*.dmg" would embed a "./" prefix that `sha256sum -c`
+          # then fails to resolve against a plainly-named downloaded file.
+          cd dist-release
+          shasum -a 256 *.dmg > SHA256SUMS-macos.txt
+          ls -la
+          cat SHA256SUMS-macos.txt
+
+      # Runs only after the smoke probes above have passed — a step without
+      # `if: always()` is skipped once an earlier step fails. That is deliberate:
+      # a .dmg whose packaged app did not demonstrably launch, hide, reveal, and
+      # quit has no business being a public download. The cost is that a flaky
+      # smoke run blocks the publish; re-run the job to release.
+      #
+      # This step deliberately sets no `body`. desktop-windows.yml owns the
+      # release notes, and whichever workflow finishes second would otherwise
+      # overwrite the other's text. Omitting it leaves any existing body intact,
+      # so the two workflows can land in either order.
+      - name: Publish .dmg to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist-release/*.dmg
+            dist-release/SHA256SUMS-macos.txt
+          fail_on_unmatched_files: true
+          draft: false
 
       - name: Installation notes
         run: |

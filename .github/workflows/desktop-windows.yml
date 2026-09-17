@@ -246,9 +246,13 @@ jobs:
 
           # A checksum manifest, so whoever downloads an unsigned installer has
           # something to verify it against.
+          #
+          # Named per-platform, not SHA256SUMS.txt: desktop-macos.yml publishes
+          # into the SAME release for a given desktop-v* tag, and two assets
+          # sharing one name would silently overwrite each other.
           Get-ChildItem dist-release -File |
             ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $_.Name } |
-            Set-Content -Path dist-release/SHA256SUMS.txt -Encoding ascii
+            Set-Content -Path dist-release/SHA256SUMS-windows.txt -Encoding ascii
 
           Get-ChildItem dist-release -File | Format-Table Name, Length | Out-String | Write-Host
 
@@ -282,19 +286,39 @@ jobs:
           files: |
             dist-release/*.msi
             dist-release/*-setup.exe
-            dist-release/SHA256SUMS.txt
+            dist-release/SHA256SUMS-windows.txt
           fail_on_unmatched_files: true
           draft: false
+          # This workflow owns the release notes for both platforms;
+          # desktop-macos.yml attaches its .dmg without setting a body, so
+          # whichever finishes second cannot clobber this text.
           body: |
-            Windows desktop client, 64-bit.
+            ### Windows (64-bit)
 
-            **Download `Caelon-Portal_*_x64_en-US.msi`** for the standard install
-            — it is also what Intune and Group Policy deploy. The `*-setup.exe`
-            is an NSIS per-user alternative.
+            **`Caelon-Portal_*_x64_en-US.msi`** is the standard install, and what
+            Intune and Group Policy deploy. The `*-setup.exe` is an NSIS per-user
+            alternative.
 
-            These installers are **unsigned**. SmartScreen will show "Windows
-            protected your PC"; choose **More info** → **Run anyway**. Verify the
-            download against `SHA256SUMS.txt` first.
+            Unsigned: SmartScreen shows "Windows protected your PC" — choose
+            **More info** → **Run anyway**.
+
+            ### macOS (Apple Silicon)
+
+            **`Caelon-Portal_*_aarch64.dmg`**, published by the macOS workflow on
+            this same tag.
+
+            Unsigned and unnotarized, so Gatekeeper reports "app is damaged and
+            can't be opened", which is misleading — the bundle is fine. After
+            dragging the app to /Applications:
+
+            ```
+            xattr -dr com.apple.quarantine "/Applications/Caelon Portal.app"
+            ```
+
+            ---
+
+            Verify downloads against `SHA256SUMS-windows.txt` /
+            `SHA256SUMS-macos.txt` before installing.
 
       - name: Installation notes
         shell: bash

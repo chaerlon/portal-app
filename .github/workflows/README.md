@@ -3,7 +3,10 @@
 ## `desktop-macos.yml` — Caelon Portal desktop, Apple Silicon
 
 Builds the Tauri desktop client in `caelon-desktop/` for `aarch64-apple-darwin`
-and uploads the `.app` and `.dmg` as workflow artifacts.
+and uploads the `.app` and `.dmg` as workflow artifacts. On a `desktop-v*` tag it
+also attaches the `.dmg` to the GitHub Release — the same release
+`desktop-windows.yml` publishes the installers to, so one tag produces one
+download page covering both platforms.
 
 After artifact upload, it launches the packaged app through the opt-in lifecycle
 and notification probes. Runtime results, logs, and available screenshots are
@@ -14,13 +17,31 @@ probe proves IPC request acceptance, not native banner delivery or OS permission
 
 ### Triggers
 
-| Trigger | When |
-|---|---|
-| `workflow_dispatch` | Manual. Optional `portal_url` input overrides the URL compiled into the binary. |
-| `push` on tag `desktop-v*` | Release builds, e.g. `desktop-v0.1.0`. |
+| Trigger | When | Output |
+|---|---|---|
+| `workflow_dispatch` | Manual. Optional `portal_url` input overrides the URL compiled into the binary. | Workflow artifacts only (14 days). No release. |
+| `push` on tag `desktop-v*` | Release builds, e.g. `desktop-v0.1.0`. | Artifacts **and** the `.dmg` plus `SHA256SUMS-macos.txt` attached to the tag's GitHub Release. |
 
 It deliberately does **not** run on pushes to `main` — a full Rust release build
 plus DMG packaging is too slow to sit in the normal push path.
+
+### Sharing a release with `desktop-windows.yml`
+
+Both workflows fire on `desktop-v*` and publish into the same release, so two
+details keep them from fighting:
+
+- **Only Windows sets the release `body`.** This workflow omits it, which leaves
+  any existing text intact — so the two can finish in either order without one
+  overwriting the other's notes.
+- **Checksum manifests are named per platform** (`SHA256SUMS-macos.txt` here,
+  `SHA256SUMS-windows.txt` there). Two assets sharing one name would silently
+  overwrite each other.
+
+The publish step sits *after* the smoke probes, so a `.dmg` whose packaged app did
+not demonstrably launch, hide, reveal, and quit never becomes a public download —
+a step without `if: always()` is skipped once an earlier step fails. The cost is
+that a flaky smoke run blocks the publish; re-run the job to release. Moving the
+step above the smoke probes would trade that for publishing unverified bundles.
 
 ### Prerequisites
 
@@ -71,7 +92,7 @@ exists to make that MSI *downloadable*.
 | Trigger | When | Output |
 |---|---|---|
 | `workflow_dispatch` | Manual. Optional `portal_url` input overrides the URL compiled into the binary. | Workflow artifacts only (14 days). No release. |
-| `push` on tag `desktop-v*` | Release builds, e.g. `desktop-v0.1.0`. | Artifacts **and** a published GitHub Release with both installers plus `SHA256SUMS.txt`. |
+| `push` on tag `desktop-v*` | Release builds, e.g. `desktop-v0.1.0`. | Artifacts **and** a published GitHub Release with both installers plus `SHA256SUMS-windows.txt`. |
 
 Only a tag can produce a public download, so a manual build pointed at a staging
 `portal_url` cannot become one by accident. The release step is the only reason

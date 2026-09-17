@@ -178,7 +178,7 @@ Installing is also the only way to see notifications on Windows — see
 
 `.github/workflows/desktop-windows.yml` builds both installers on a
 `windows-latest` runner and, on a `desktop-v*` tag, attaches them to a GitHub
-Release together with a `SHA256SUMS.txt`. That release asset **is** the download
+Release together with a `SHA256SUMS-windows.txt`. That release asset **is** the download
 link — no separate hosting.
 
 To cut one, bump `version` in *both* `src-tauri/tauri.conf.json` and
@@ -204,16 +204,26 @@ Assets are renamed from `Caelon Portal_…` to `Caelon-Portal_…` before upload
 because GitHub turns every space in a release asset name into a dot.
 
 Note that `desktop-v*` also triggers `desktop-macos.yml`, so one tag builds both
-platforms — but the macOS workflow only uploads workflow artifacts. A tagged
-release therefore carries Windows installers and no `.dmg` until that workflow
-grows a publish step of its own.
+platforms, and both publish into the *same* release: Windows attaches the `.msi`
+and `-setup.exe`, macOS attaches the `.dmg`. One tag, one download page.
+
+The two are deliberately not symmetric in one respect. `desktop-windows.yml`
+owns the release notes; `desktop-macos.yml` sets no `body`, so whichever
+finishes second cannot overwrite the other's text. Their checksum manifests are
+named per-platform (`SHA256SUMS-windows.txt`, `SHA256SUMS-macos.txt`) for the
+same reason — two assets sharing one name would silently overwrite each other.
+
+The macOS publish also runs *after* its smoke probes, so a `.dmg` whose packaged
+app did not demonstrably launch, hide, reveal, and quit never becomes a public
+download. The cost is that a flaky smoke run blocks the publish; re-run the job
+to release.
 
 ### SmartScreen
 
 The build is **unsigned**. Microsoft Defender SmartScreen shows "Windows
 protected your PC" for any installer without an Authenticode signature and
 without established download reputation; the **Run anyway** button is hidden
-until the user clicks **More info** first. Publish `SHA256SUMS.txt` alongside the
+until the user clicks **More info** first. Publish `SHA256SUMS-windows.txt` alongside the
 installer so people can at least verify what they downloaded.
 
 Signing on Windows is **not** the Apple flow. The Tauri CLI reads no certificate
